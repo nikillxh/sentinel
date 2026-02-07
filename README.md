@@ -248,18 +248,123 @@ npm test && cd contracts && forge test && cd ..
 npx vitest
 ```
 
-### Deploy Contracts
+## Deployment
+
+### Option A: Local Network (Anvil)
+
+The fastest way to test with real contracts — no testnet ETH needed.
+
+**Terminal 1 — Start Anvil:**
+
+```bash
+# Start a local EVM node (forks Base Sepolia for realistic USDC)
+anvil --fork-url https://sepolia.base.org --chain-id 84532
+```
+
+Anvil prints 10 funded accounts. Copy the **first private key** (Account 0).
+
+**Terminal 2 — Deploy:**
 
 ```bash
 cd contracts
 
-# Deploy to Base Sepolia
+# Set the operator key (Anvil account 0)
+export OPERATOR_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+
+# Deploy to local Anvil
+forge script script/Deploy.s.sol \
+  --rpc-url http://127.0.0.1:8545 \
+  --broadcast
+```
+
+The script prints the deployed addresses. Update your `.env`:
+
+```bash
+RPC_URL=http://127.0.0.1:8545
+OPERATOR_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+SENTINEL_WALLET_ADDRESS=<printed address>
+POLICY_GUARD_ADDRESS=<printed address>
+```
+
+**Terminal 2 — Run the demo against local contracts:**
+
+```bash
+cd ..
+npx tsx src/demo/scenario.ts
+```
+
+### Option B: Base Sepolia Testnet
+
+For a persistent deployment on the public Base Sepolia testnet.
+
+**1. Get testnet ETH:**
+
+- [Base Sepolia Faucet](https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet) — requires a Coinbase account
+- Or bridge from Sepolia using the [Base Bridge](https://bridge.base.org/)
+
+**2. Configure `.env`:**
+
+```bash
+cp .env.example .env
+```
+
+```dotenv
+RPC_URL=https://sepolia.base.org
+CHAIN_ID=84532
+OPERATOR_PRIVATE_KEY=0x<your-funded-testnet-key>
+ETHERSCAN_API_KEY=<your-basescan-api-key>   # optional, for verification
+```
+
+**3. Deploy:**
+
+```bash
+cd contracts
+
+# Deploy + verify on BaseScan
 forge script script/Deploy.s.sol \
   --rpc-url $RPC_URL \
   --broadcast \
-  --verify
+  --verify \
+  --etherscan-api-key $ETHERSCAN_API_KEY
 
-# Update .env with deployed addresses
+# Without verification (skip --verify and --etherscan-api-key)
+forge script script/Deploy.s.sol \
+  --rpc-url $RPC_URL \
+  --broadcast
+```
+
+**4. Update `.env` with the printed addresses:**
+
+```dotenv
+SENTINEL_WALLET_ADDRESS=0x...
+POLICY_GUARD_ADDRESS=0x...
+```
+
+**5. (Optional) Fund the SentinelWallet:**
+
+```bash
+# Send some ETH to the wallet so it can pay for settlement gas
+cast send $SENTINEL_WALLET_ADDRESS \
+  --value 0.01ether \
+  --rpc-url $RPC_URL \
+  --private-key $OPERATOR_PRIVATE_KEY
+```
+
+**6. Run the demo against Base Sepolia:**
+
+```bash
+cd ..
+npx tsx src/demo/scenario.ts
+```
+
+### Option C: Mock Mode (No Deployment Needed)
+
+If you just want to explore the policy engine and MCP tools without any on-chain interaction, **no deployment is needed**. Leave the contract addresses unset in `.env` and everything runs in mock mode:
+
+```bash
+npm install
+npx tsx src/demo/scenario.ts    # full demo, mock settlement
+npx tsx src/mcp-server/index.ts # MCP server, mock settlement
 ```
 
 ## Environment Variables
@@ -270,6 +375,8 @@ forge script script/Deploy.s.sol \
 | `OPERATOR_PRIVATE_KEY` | For on-chain | Operator key for settlement transactions |
 | `SENTINEL_WALLET_ADDRESS` | For on-chain | Deployed SentinelWallet address |
 | `POLICY_GUARD_ADDRESS` | For on-chain | Deployed PolicyGuard address |
+| `ENTRYPOINT_ADDRESS` | Optional | ERC-4337 EntryPoint v0.7 (defaults to canonical address) |
+| `ETHERSCAN_API_KEY` | Optional | BaseScan API key for contract verification |
 | `NITROLITE_BROKER_URL` | Optional | WebSocket URL for Nitrolite broker |
 | `NITROLITE_SIGNER_KEY` | Optional | Private key for channel state signing |
 | `NITROLITE_BROKER_ADDRESS` | Optional | Broker's Ethereum address |
