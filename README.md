@@ -3,9 +3,7 @@
   <p align="center">
     <strong>Policy-Governed MCP Wallet for Safe AI-Driven DeFi Execution</strong>
   </p>
-  <p align="center">
-    ETHGlobal HackMoney 2026
-  </p>
+  
 </p>
 
 <p align="center">
@@ -29,93 +27,46 @@ AI agents are increasingly capable of executing financial operations — but giv
 Swaps execute **instantly off-chain** via Yellow Network / Nitrolite state channels during the session, and settle **once on-chain** when the session closes — combining the UX of a CEX with the security of a smart contract wallet.
 
 ```
-┌──────────────┐     MCP Protocol     ┌──────────────────────────────────────────────┐
-│              │◄────────────────────►│                  Sentinel                    │
-│   AI Agent   │   4 tools via stdio   │                                              │
-│  (Claude,    │                       │  ┌────────────┐  ┌─────────────────────┐     │
-│   GPT, etc.) │                       │  │   Policy    │  │  Session Manager    │     │
-│              │                       │  │   Engine    │  │  (Nitrolite Channel)│     │
-└──────────────┘                       │  │  4 rules,   │  │  Off-chain balance  │     │
-                                       │  │  SHA-256    │  │  tracking + state   │     │
-┌──────────────┐                       │  │  anchored   │  │  channel co-signing │     │
-│   Next.js    │   fetch() proxy       │  └─────┬──────┘  └──────────┬──────────┘     │
-│   Frontend   │──────────────────────►│        │ approve/reject      │ update         │
-│  :3000       │   API Server :3001    │        ▼                     ▼                │
-└──────────────┘                       │  ┌──────────────────────────────────────┐     │
-                                       │  │         Swap Simulator               │     │
-                                       │  │   Uniswap v4 Quoter / Local AMM     │     │
-                                       │  └──────────────────────────────────────┘     │
-                                       │                    │ settle                    │
-                                       │                    ▼                           │
-                                       │  ┌──────────────────────────────────────┐     │
-                                       │  │     On-Chain (Base Sepolia)          │     │
-                                       │  │  SentinelWallet ← PolicyGuard       │     │
-                                       │  │  ERC-4337 · ENS Identity            │     │
-                                       │  └──────────────────────────────────────┘     │
-                                       └──────────────────────────────────────────────┘
+┌──────────────┐     MCP Protocol      ┌─────────────────────────────────────────────┐
+│              │◄────────────────────► │                  Sentinel                   │
+│   AI Agent   │   4 tools via stdio   │                                             │
+│  (Claude,    │                       │  ┌────────────┐  ┌─────────────────────┐    │
+│   GPT, etc.) │                       │  │   Policy   │  │  Session Manager    │    │
+│              │                       │  │   Engine   │  │  (Nitrolite Channel)│    │
+└──────────────┘                       │  │  4 rules,  │  │  Off-chain balance  │    │
+                                       │  │  SHA-256   │  │  tracking + state   │    │
+┌──────────────┐                       │  │  anchored  │  │  channel co-signing │    │
+│   Next.js    │   fetch() proxy       │  └─────┬──────┘  └──────────┬──────────┘    │
+│   Frontend   │──────────────────────►│        │ approve/reject      │ update       │
+│  :3000       │   API Server :3001    │        ▼                     ▼              │
+└──────────────┘                       │  ┌──────────────────────────────────────┐   │
+                                       │  │         Swap Simulator               │   │
+                                       │  │   Uniswap v4 Quoter / Local AMM      │   │
+                                       │  └──────────────────────────────────────┘   │
+                                       │                    │ settle                 │
+                                       │                    ▼                        │
+                                       │  ┌──────────────────────────────────────┐   │
+                                       │  │     On-Chain (Base Sepolia)          |   │
+                                       │  │  SentinelWallet ← PolicyGuard        │   │
+                                       │  │  ERC-4337 · ENS Identity             │   │
+                                       │  └──────────────────────────────────────┘   │
+                                       └─────────────────────────────────────────────┘
 ```
 
 ## Key Features
 
 | Feature | Description |
 |---|---|
-| **🔒 Policy Engine** | 4 deterministic rules: max trade size (2% of balance), allowed DEX (Uniswap v4 only), allowed assets (USDC/ETH), max slippage (0.5%). Every decision is logged with a full audit trail. |
+| **Policy Engine** | 4 deterministic rules: max trade size (2% of balance), allowed DEX (Uniswap v4 only), allowed assets (USDC/ETH), max slippage (0.5%). Every decision is logged with a full audit trail. |
 | **⚡ Off-Chain Sessions** | Swaps execute instantly and gaslessly during the session via Nitrolite state channels. Each state transition is co-signed with **real ECDSA** (`ethers.Wallet.signMessage`). |
-| **🔗 On-Chain Settlement** | Final session balances settle once on-chain via the SentinelWallet smart contract, validated by PolicyGuard. ERC-4337 compatible. |
-| **🤖 MCP Server** | 4 tools exposed over the Model Context Protocol — any MCP-compatible AI agent (Claude Desktop, etc.) can use them. |
-| **📊 Uniswap v4 Integration** | Queries the Quoter2 contract for real on-chain swap quotes. `getSpotPrice()` reads `sqrtPriceX96` from PoolManager slot0, with Quoter micro-quote and local AMM fallbacks. `buildSwapCalldata()` uses proper ABI-encoded PoolKey + SwapParams. |
-| **🪪 ENS Identity** | Agent identity resolved from ENS on session open. Policy hash stored as a text record (`com.sentinel.policyHash`) for tamper-proof verification. |
-| **🏗️ Smart Contracts** | `SentinelWallet` (ERC-4337 smart wallet) + `PolicyGuard` (on-chain policy enforcement). Solidity 0.8.24, OpenZeppelin v5, Foundry tested. |
-| **🌐 Web Dashboard** | Next.js 15 + React 19 + Tailwind CSS frontend. Proxies all calls to the real backend API — zero duplicate logic. |
+| **On-Chain Settlement** | Final session balances settle once on-chain via the SentinelWallet smart contract, validated by PolicyGuard. ERC-4337 compatible. |
+| **MCP Server** | 4 tools exposed over the Model Context Protocol — any MCP-compatible AI agent (Claude Desktop, etc.) can use them. |
+| **Uniswap v4 Integration** | Queries the Quoter2 contract for real on-chain swap quotes. `getSpotPrice()` reads `sqrtPriceX96` from PoolManager slot0, with Quoter micro-quote and local AMM fallbacks. `buildSwapCalldata()` uses proper ABI-encoded PoolKey + SwapParams. |
+| **ENS Identity** | Agent identity resolved from ENS on session open. Policy hash stored as a text record (`com.sentinel.policyHash`) for tamper-proof verification. |
+| **Smart Contracts** | `SentinelWallet` (ERC-4337 smart wallet) + `PolicyGuard` (on-chain policy enforcement). Solidity 0.8.24, OpenZeppelin v5, Foundry tested. |
+| **Web Dashboard** | Next.js 15 + React 19 + Tailwind CSS frontend. Proxies all calls to the real backend API — zero duplicate logic. |
 
 ## Architecture
-
-### Components
-
-```
-src/
-├── shared/               # Types, constants, logger, ENS resolver
-│   ├── types.ts          # All protocol type definitions
-│   ├── constants.ts      # Policy defaults, token registry, chain config
-│   ├── logger.ts         # Structured color-coded logging
-│   └── ens.ts            # ENS identity resolution + policy verification
-│
-├── policy-engine/        # Deterministic rule evaluation
-│   └── engine.ts         # 4 rules, SHA-256 policy hash, full audit trail
-│
-├── session/              # Off-chain session management
-│   ├── manager.ts        # Balance tracking, swap execution, session lifecycle
-│   └── channel.ts        # Nitrolite state channel (real ECDSA signatures)
-│
-├── mcp-server/           # MCP protocol interface
-│   ├── index.ts          # Server entry point (stdio transport)
-│   ├── tools.ts          # 4 MCP tool handlers with Zod schemas
-│   ├── swap-simulator.ts # Constant-product AMM + Uniswap v4 fallback
-│   └── uniswap-client.ts # On-chain Quoter2 + PoolManager slot0 integration
-│
-├── api/                  # Backend API server (wraps all real services)
-│   └── server.ts         # HTTP server on port 3001 — frontend proxies here
-│
-├── contracts/            # TypeScript bindings for smart contracts
-│   ├── abis.ts           # Human-readable ABIs
-│   └── settlement.ts     # SettlementClient for on-chain settlement
-│
-└── demo/
-    └── scenario.ts       # Full 7-step demo scenario
-
-frontend/                 # Next.js 15 + React 19 + Tailwind dashboard
-├── app/                  # App router pages + API routes (proxy to backend)
-├── components/           # UI components (Header, SwapPanel, PolicyPanel, etc.)
-└── lib/sentinel.ts       # Thin fetch() wrapper → real backend API
-
-contracts/                # Solidity smart contracts (Foundry)
-├── src/
-│   ├── SentinelWallet.sol   # ERC-4337 smart wallet
-│   ├── PolicyGuard.sol      # On-chain policy enforcement
-│   └── interfaces/          # ISentinelWallet, IPolicyGuard
-├── test/                    # Foundry tests (27 passing)
-└── foundry.toml             # Solidity 0.8.24, Cancun EVM, optimizer 200 runs
-```
 
 ### MCP Tools
 
@@ -183,11 +134,8 @@ The policy config is hashed with SHA-256 and anchored on ENS, so any tampering i
 # Clone the repository
 git clone https://github.com/your-org/sentinel.git
 cd sentinel
-
-# Install Node.js dependencies
 npm install
 
-# Install Foundry dependencies (OpenZeppelin, forge-std)
 cd contracts && forge install && cd ..
 ```
 
@@ -198,15 +146,6 @@ The easiest way to run everything locally — no API keys needed:
 ```bash
 ./start.sh
 ```
-
-This single command:
-1. ✅ Checks prerequisites (Node ≥ 20, Foundry)
-2. ✅ Installs all dependencies (root + frontend)
-3. ✅ Starts Anvil on port 8546 (local EVM)
-4. ✅ Deploys SentinelWallet + PolicyGuard contracts
-5. ✅ Generates `.env` with deployed addresses + Nitrolite config
-6. ✅ Starts the Sentinel API server on port 3001
-7. ✅ Starts the Next.js frontend on port 3000
 
 Open **http://localhost:3000** and start trading.
 
@@ -235,7 +174,6 @@ cp .env.example .env
 # Run the full 7-step demo scenario
 npx tsx src/demo/scenario.ts
 ```
-
 This will:
 1. Open a session with 1000 USDC
 2. Simulate a 2% USDC→ETH swap
@@ -277,20 +215,35 @@ Connect from any MCP-compatible client (Claude Desktop, etc.) by adding to your 
 ```
 
 ### Run Tests
-
 ```bash
 # TypeScript tests (115 tests)
 npm test
-
-# Foundry / Solidity tests (27 tests)
 cd contracts && forge test -vv
-
-# Both
-npm test && cd contracts && forge test && cd ..
-
 # Watch mode
 npx vitest
 ```
+
+## Test Coverage
+```
+ ✓ src/policy-engine/engine.test.ts        24 tests
+ ✓ src/session/manager.test.ts             19 tests
+ ✓ src/session/channel.test.ts             18 tests
+ ✓ src/mcp-server/swap-simulator.test.ts    9 tests
+ ✓ src/mcp-server/uniswap-client.test.ts   10 tests
+ ✓ src/mcp-server/tools.test.ts            12 tests
+ ✓ src/contracts/settlement.test.ts         8 tests
+ ✓ src/shared/ens.test.ts                  15 tests
+────────────────────────────────────────────────
+   TypeScript                             115 tests
+
+ ✓ contracts/test/PolicyGuard.t.sol        12 tests
+ ✓ contracts/test/SentinelWallet.t.sol     15 tests
+────────────────────────────────────────────────
+   Solidity (Foundry)                      27 tests
+
+   TOTAL                                  142 tests ✅
+```
+
 
 ## Deployment
 
@@ -419,7 +372,6 @@ npx tsx src/mcp-server/index.ts # MCP server, mock settlement
 ```
 
 ## Environment Variables
-
 | Variable | Required | Description |
 |---|---|---|
 | `RPC_URL` | For on-chain | Base Sepolia RPC endpoint |
@@ -441,7 +393,7 @@ npx tsx src/mcp-server/index.ts # MCP server, mock settlement
 
 > **Note:** All on-chain features gracefully degrade. Without env vars, Sentinel runs in full mock mode — perfect for development and demos. The `start.sh` script auto-configures everything for local development.
 
-## Do I Need API Keys?
+## API Keys
 
 **For local development: NO.** The `./start.sh` script runs everything locally with zero external dependencies:
 
@@ -454,48 +406,6 @@ npx tsx src/mcp-server/index.ts # MCP server, mock settlement
 | **BaseScan Verification** | Not needed | Optional `ETHERSCAN_API_KEY` for `--verify` during deployment. Get one free at [BaseScan](https://basescan.org/apis). |
 | **Smart Contracts** | Deployed to local Anvil | Testnet ETH from [Base Faucet](https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet) (free, Coinbase account). |
 
-> **TL;DR:** Run `./start.sh` — zero API keys, zero testnet ETH, everything works out of the box.
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Language | TypeScript (ESM, strict mode) |
-| Runtime | Node.js ≥ 20, tsx for dev |
-| MCP | `@modelcontextprotocol/sdk` v1.12 |
-| Frontend | Next.js 15, React 19, Tailwind CSS 3.4 |
-| API Server | Node.js `http` module — lightweight, zero deps |
-| Validation | Zod schemas on all tool inputs |
-| Blockchain | ethers v6, viem v2.21 |
-| Smart Contracts | Solidity 0.8.24, OpenZeppelin v5, Foundry |
-| Chain | Base Sepolia (84532) |
-| DEX | Uniswap v4 (Quoter2 + PoolManager slot0 + local AMM fallback) |
-| State Channels | Yellow Network / Nitrolite (real ECDSA signatures) |
-| Identity | ENS (text records for policy anchoring) |
-| Testing | Vitest (TS), Forge (Solidity) |
-| Logging | Chalk v5, structured per-module colors |
-
-## Test Coverage
-
-```
- ✓ src/policy-engine/engine.test.ts        24 tests
- ✓ src/session/manager.test.ts             19 tests
- ✓ src/session/channel.test.ts             18 tests
- ✓ src/mcp-server/swap-simulator.test.ts    9 tests
- ✓ src/mcp-server/uniswap-client.test.ts   10 tests
- ✓ src/mcp-server/tools.test.ts            12 tests
- ✓ src/contracts/settlement.test.ts         8 tests
- ✓ src/shared/ens.test.ts                  15 tests
-────────────────────────────────────────────────
-   TypeScript                             115 tests
-
- ✓ contracts/test/PolicyGuard.t.sol        12 tests
- ✓ contracts/test/SentinelWallet.t.sol     15 tests
-────────────────────────────────────────────────
-   Solidity (Foundry)                      27 tests
-
-   TOTAL                                  142 tests ✅
-```
 
 ## Security Model
 
@@ -531,7 +441,3 @@ Agent → propose_swap({ tokenIn: "USDC", tokenOut: "ETH", amount: 50 })
 MIT
 
 ---
-
-<p align="center">
-  Built with 🛡️ for <strong>ETHGlobal HackMoney 2026</strong>
-</p>
