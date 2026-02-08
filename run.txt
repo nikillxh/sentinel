@@ -1,0 +1,5 @@
+cd /home/nikhilesh/Infinity/Blockchain/Sentinel && npx tsx src/api/server.ts 2>&1
+
+cd /home/nikhilesh/Infinity/Blockchain/Sentinel/frontend && npm run dev 2>&1
+
+run both
