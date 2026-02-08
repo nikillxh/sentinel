@@ -31,7 +31,6 @@ banner() {
   echo ""
   echo -e "${CYAN}  ┌──────────────────────────────────────────┐${NC}"
   echo -e "${CYAN}  │${NC}  🛡️  ${GREEN}Sentinel${NC} – Local Demo Launcher       ${CYAN}│${NC}"
-  echo -e "${CYAN}  │${NC}     ETHGlobal HackMoney 2026             ${CYAN}│${NC}"
   echo -e "${CYAN}  └──────────────────────────────────────────┘${NC}"
   echo ""
 }
