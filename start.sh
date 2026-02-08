@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
 # ============================================================
-# Sentinel – Local Demo Launcher
-# Starts Anvil → deploys contracts → API server → frontend.
-# Three services: Anvil (:8546), API (:3001), Frontend (:3000)
+# Sentinel – Demo Launcher
+# Supports two modes:
+#   local   → Anvil (:8546) → deploy contracts → API (:3001) → Frontend (:3000)
+#   testnet → API (:3001) → Frontend (:3000)  (uses real Base Sepolia RPC)
 #
-# Usage:  ./start.sh          # start everything
-#         ./start.sh stop     # stop all services
+# Usage:
+#   ./start.sh                 # auto-detect from SENTINEL_MODE or default to local
+#   ./start.sh local           # force local Anvil mode
+#   ./start.sh testnet         # force testnet mode (requires .env with real keys)
+#   ./start.sh stop            # stop all services
 #
-# No API keys required — everything runs locally.
+# In testnet mode:
+#   - No Anvil needed — connects directly to Base Sepolia via RPC_URL in .env
+#   - Uniswap v4 uses real deployed contracts (PoolManager, V4Quoter)
+#   - Nitrolite connects to Yellow ClearNode at wss://clearnet.yellow.com/ws
+#   - ENS resolves via Ethereum mainnet
+#   - AI agent runs with configured provider (heuristic/openai/anthropic)
 # ============================================================
 
 set -euo pipefail
@@ -30,7 +39,7 @@ NC='\033[0m'
 banner() {
   echo ""
   echo -e "${CYAN}  ┌──────────────────────────────────────────┐${NC}"
-  echo -e "${CYAN}  │${NC}  🛡️  ${GREEN}Sentinel${NC} – Local Demo Launcher       ${CYAN}│${NC}"
+  echo -e "${CYAN}  │${NC}  🛡️  ${GREEN}Sentinel${NC} – Demo Launcher              ${CYAN}│${NC}"
   echo -e "${CYAN}  │${NC}     ETHGlobal HackMoney 2026             ${CYAN}│${NC}"
   echo -e "${CYAN}  └──────────────────────────────────────────┘${NC}"
   echo ""
@@ -74,14 +83,26 @@ if [ "${1:-}" = "stop" ]; then
   exit 0
 fi
 
+# --- Determine mode ---
+# Priority: CLI arg > SENTINEL_MODE env var > default (local)
+MODE="${1:-${SENTINEL_MODE:-local}}"
+
+if [ "$MODE" != "local" ] && [ "$MODE" != "testnet" ]; then
+  err "Unknown mode: $MODE. Use 'local' or 'testnet'."
+  exit 1
+fi
+
 # --- Preflight checks ---
 banner
-step "Checking prerequisites..."
+step "Checking prerequisites... (mode: $MODE)"
 
 command -v node >/dev/null 2>&1 || { err "Node.js not found. Install Node >= 20."; exit 1; }
-command -v anvil >/dev/null 2>&1 || { err "Anvil not found. Install Foundry: https://book.getfoundry.sh"; exit 1; }
-command -v forge >/dev/null 2>&1 || { err "Forge not found. Install Foundry: https://book.getfoundry.sh"; exit 1; }
 command -v curl >/dev/null 2>&1 || { err "curl not found. Install curl."; exit 1; }
+
+if [ "$MODE" = "local" ]; then
+  command -v anvil >/dev/null 2>&1 || { err "Anvil not found. Install Foundry: https://book.getfoundry.sh"; exit 1; }
+  command -v forge >/dev/null 2>&1 || { err "Forge not found. Install Foundry: https://book.getfoundry.sh"; exit 1; }
+fi
 
 NODE_VERSION=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
 if [ "$NODE_VERSION" -lt 20 ]; then
@@ -90,17 +111,21 @@ if [ "$NODE_VERSION" -lt 20 ]; then
 fi
 
 log "Node $(node -v)"
-log "Anvil $(anvil --version 2>&1 | head -1)"
-log "Forge $(forge --version 2>&1 | head -1)"
+if [ "$MODE" = "local" ]; then
+  log "Anvil $(anvil --version 2>&1 | head -1)"
+  log "Forge $(forge --version 2>&1 | head -1)"
+fi
 
 # Create log directory
 mkdir -p "$LOG_DIR"
 
 # --- Kill anything on our ports ---
-step "Freeing ports $ANVIL_PORT, $API_PORT, and $FRONTEND_PORT..."
-lsof -ti :"$ANVIL_PORT" 2>/dev/null | xargs -r kill 2>/dev/null || true
+step "Freeing ports $API_PORT and $FRONTEND_PORT..."
 lsof -ti :"$API_PORT" 2>/dev/null | xargs -r kill 2>/dev/null || true
 lsof -ti :"$FRONTEND_PORT" 2>/dev/null | xargs -r kill 2>/dev/null || true
+if [ "$MODE" = "local" ]; then
+  lsof -ti :"$ANVIL_PORT" 2>/dev/null | xargs -r kill 2>/dev/null || true
+fi
 sleep 1
 log "Ports clear"
 
@@ -121,69 +146,71 @@ else
   log "Frontend dependencies already installed"
 fi
 
-# --- Start Anvil ---
-step "Starting Anvil on port $ANVIL_PORT..."
+# --- Start Anvil (local mode only) ---
+if [ "$MODE" = "local" ]; then
+  step "Starting Anvil on port $ANVIL_PORT..."
 
-anvil \
-  --chain-id 84532 \
-  --port "$ANVIL_PORT" \
-  --silent \
-  > "$LOG_DIR/anvil.log" 2>&1 &
+  anvil \
+    --chain-id 84532 \
+    --port "$ANVIL_PORT" \
+    --silent \
+    > "$LOG_DIR/anvil.log" 2>&1 &
 
-echo $! > "$LOG_DIR/anvil.pid"
+  echo $! > "$LOG_DIR/anvil.pid"
 
-# Wait for Anvil to be ready
-for i in $(seq 1 15); do
-  if curl -s "http://127.0.0.1:$ANVIL_PORT" \
+  # Wait for Anvil to be ready
+  for i in $(seq 1 15); do
+    if curl -s "http://127.0.0.1:$ANVIL_PORT" \
+      -X POST \
+      -H "Content-Type: application/json" \
+      -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' \
+      > /dev/null 2>&1; then
+      break
+    fi
+    sleep 0.5
+  done
+
+  # Verify
+  CHAIN=$(curl -s "http://127.0.0.1:$ANVIL_PORT" \
     -X POST \
     -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' \
-    > /dev/null 2>&1; then
-    break
+    -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' 2>/dev/null \
+    | grep -o '"result":"[^"]*"' | cut -d'"' -f4)
+
+  if [ -z "$CHAIN" ]; then
+    err "Anvil failed to start. Check $LOG_DIR/anvil.log"
+    exit 1
   fi
-  sleep 0.5
-done
+  log "Anvil running — chain ID $CHAIN (PID $(cat "$LOG_DIR/anvil.pid"))"
 
-# Verify
-CHAIN=$(curl -s "http://127.0.0.1:$ANVIL_PORT" \
-  -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' 2>/dev/null \
-  | grep -o '"result":"[^"]*"' | cut -d'"' -f4)
+  # --- Deploy contracts ---
+  step "Deploying contracts..."
 
-if [ -z "$CHAIN" ]; then
-  err "Anvil failed to start. Check $LOG_DIR/anvil.log"
-  exit 1
-fi
-log "Anvil running — chain ID $CHAIN (PID $(cat "$LOG_DIR/anvil.pid"))"
+  DEPLOY_OUTPUT=$(cd "$ROOT_DIR/contracts" && \
+    OPERATOR_PRIVATE_KEY="$ANVIL_KEY" \
+    forge script script/Deploy.s.sol \
+      --rpc-url "http://127.0.0.1:$ANVIL_PORT" \
+      --broadcast 2>&1)
 
-# --- Deploy contracts ---
-step "Deploying contracts..."
+  # Extract addresses from deploy output
+  POLICY_GUARD=$(echo "$DEPLOY_OUTPUT" | grep "PolicyGuard deployed" | grep -oE '0x[0-9a-fA-F]{40}')
+  SENTINEL_WALLET=$(echo "$DEPLOY_OUTPUT" | grep "SentinelWallet deployed" | grep -oE '0x[0-9a-fA-F]{40}')
 
-DEPLOY_OUTPUT=$(cd "$ROOT_DIR/contracts" && \
-  OPERATOR_PRIVATE_KEY="$ANVIL_KEY" \
-  forge script script/Deploy.s.sol \
-    --rpc-url "http://127.0.0.1:$ANVIL_PORT" \
-    --broadcast 2>&1)
+  if [ -z "$POLICY_GUARD" ] || [ -z "$SENTINEL_WALLET" ]; then
+    warn "Could not parse addresses, using defaults from .env"
+    POLICY_GUARD="0x5FbDB2315678afecb367f032d93F642f64180aa3"
+    SENTINEL_WALLET="0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+  fi
 
-# Extract addresses from deploy output
-POLICY_GUARD=$(echo "$DEPLOY_OUTPUT" | grep "PolicyGuard deployed" | grep -oE '0x[0-9a-fA-F]{40}')
-SENTINEL_WALLET=$(echo "$DEPLOY_OUTPUT" | grep "SentinelWallet deployed" | grep -oE '0x[0-9a-fA-F]{40}')
+  log "PolicyGuard:    $POLICY_GUARD"
+  log "SentinelWallet: $SENTINEL_WALLET"
 
-if [ -z "$POLICY_GUARD" ] || [ -z "$SENTINEL_WALLET" ]; then
-  warn "Could not parse addresses, using defaults from .env"
-  POLICY_GUARD="0x5FbDB2315678afecb367f032d93F642f64180aa3"
-  SENTINEL_WALLET="0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
-fi
+  # --- Write local .env ---
+  step "Writing .env for local mode..."
 
-log "PolicyGuard:    $POLICY_GUARD"
-log "SentinelWallet: $SENTINEL_WALLET"
-
-# --- Update .env ---
-step "Updating .env..."
-
-cat > "$ROOT_DIR/.env" << EOF
-# === Sentinel Configuration (auto-generated by start.sh) ===
+  cat > "$ROOT_DIR/.env" << EOF
+# === Sentinel Configuration (auto-generated by start.sh — local mode) ===
+SENTINEL_MODE=local
 
 # EVM RPC (local Anvil)
 RPC_URL=http://127.0.0.1:$ANVIL_PORT
@@ -207,6 +234,13 @@ NITROLITE_BROKER_URL=ws://localhost:8547
 NITROLITE_SIGNER_KEY=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
 NITROLITE_BROKER_ADDRESS=0x70997970C51812dc3A010C7d01b50e0d17dc79C8
 
+# Uniswap v4 (defaults from constants.ts if not set)
+# UNISWAP_V4_POOL_MANAGER_ADDRESS=
+# UNISWAP_V4_QUOTER_ADDRESS=
+
+# AI Agent (heuristic by default — no API key needed)
+AI_PROVIDER=heuristic
+
 # API Server
 API_PORT=$API_PORT
 
@@ -219,7 +253,38 @@ MAX_SLIPPAGE_PERCENT=0.5
 LOG_LEVEL=debug
 EOF
 
-log ".env written with deployed addresses"
+  log ".env written for local mode"
+
+else
+  # --- Testnet mode ---
+  step "Testnet mode — checking .env..."
+
+  if [ ! -f "$ROOT_DIR/.env" ]; then
+    err "No .env file found. Copy .env.example to .env and fill in your keys:"
+    err "  cp .env.example .env"
+    err "  # Edit .env with your OPERATOR_PRIVATE_KEY, NITROLITE_SIGNER_KEY, etc."
+    exit 1
+  fi
+
+  # Validate critical env vars
+  source "$ROOT_DIR/.env" 2>/dev/null || true
+
+  if [ -z "${RPC_URL:-}" ] || [ "${RPC_URL:-}" = "0x..." ]; then
+    warn "RPC_URL not set — defaulting to https://sepolia.base.org"
+  else
+    log "RPC: $RPC_URL"
+  fi
+
+  if [ -z "${OPERATOR_PRIVATE_KEY:-}" ] || [ "${OPERATOR_PRIVATE_KEY:-}" = "0x..." ]; then
+    warn "OPERATOR_PRIVATE_KEY not set — settlement will fail"
+  else
+    log "Operator key configured"
+  fi
+
+  log "Uniswap v4 addresses from constants.ts (Base Sepolia)"
+  log "Nitrolite ClearNode: wss://clearnet.yellow.com/ws"
+  log "AI Provider: ${AI_PROVIDER:-heuristic}"
+fi
 
 # --- Start API Server ---
 step "Starting Sentinel API server on port $API_PORT..."
@@ -271,14 +336,17 @@ log "Frontend running — http://localhost:$FRONTEND_PORT (PID $(cat "$LOG_DIR/f
 echo ""
 echo -e "  ${CYAN}┌──────────────────────────────────────────────────┐${NC}"
 echo -e "  ${CYAN}│${NC}                                                  ${CYAN}│${NC}"
-echo -e "  ${CYAN}│${NC}   ${GREEN}🟢 All services running${NC}                        ${CYAN}│${NC}"
+echo -e "  ${CYAN}│${NC}   ${GREEN}🟢 All services running${NC}  (${YELLOW}$MODE${NC} mode)           ${CYAN}│${NC}"
 echo -e "  ${CYAN}│${NC}                                                  ${CYAN}│${NC}"
 echo -e "  ${CYAN}│${NC}   Frontend:  ${YELLOW}http://localhost:$FRONTEND_PORT${NC}            ${CYAN}│${NC}"
 echo -e "  ${CYAN}│${NC}   API:       ${YELLOW}http://localhost:$API_PORT${NC}            ${CYAN}│${NC}"
+if [ "$MODE" = "local" ]; then
 echo -e "  ${CYAN}│${NC}   Anvil:     ${YELLOW}http://127.0.0.1:$ANVIL_PORT${NC}            ${CYAN}│${NC}"
+else
+echo -e "  ${CYAN}│${NC}   Chain:     ${YELLOW}Base Sepolia (84532)${NC}                ${CYAN}│${NC}"
+fi
 echo -e "  ${CYAN}│${NC}                                                  ${CYAN}│${NC}"
-echo -e "  ${CYAN}│${NC}   Logs:      .logs/anvil.log                     ${CYAN}│${NC}"
-echo -e "  ${CYAN}│${NC}              .logs/api.log                       ${CYAN}│${NC}"
+echo -e "  ${CYAN}│${NC}   Logs:      .logs/api.log                       ${CYAN}│${NC}"
 echo -e "  ${CYAN}│${NC}              .logs/frontend.log                  ${CYAN}│${NC}"
 echo -e "  ${CYAN}│${NC}                                                  ${CYAN}│${NC}"
 echo -e "  ${CYAN}│${NC}   Stop:      ${BLUE}./start.sh stop${NC}                      ${CYAN}│${NC}"

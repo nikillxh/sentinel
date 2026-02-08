@@ -14,6 +14,7 @@
 import { randomUUID } from "node:crypto";
 import { Wallet, computeAddress, hashMessage } from "ethers";
 import { Logger } from "../shared/logger.js";
+import { NITROLITE } from "../shared/constants.js";
 import type { Asset, SessionBalance } from "../shared/types.js";
 
 // ---- Channel Types ----
@@ -49,12 +50,16 @@ export interface ChannelSession {
 
 /** Config for connecting to a Nitrolite broker */
 export interface NitroliteConfig {
-  /** WebSocket endpoint of the Nitrolite broker */
+  /** WebSocket endpoint of the Nitrolite broker / ClearNode */
   brokerUrl: string;
   /** Private key for signing channel states */
   signerPrivateKey: string;
   /** Broker's public address (for co-signing) */
   brokerAddress: string;
+  /** Custody contract address on Base Sepolia */
+  custodyAddress?: string;
+  /** Adjudicator contract address on Base Sepolia */
+  adjudicatorAddress?: string;
 }
 
 // ---- Nitrolite Channel Client ----
@@ -73,6 +78,8 @@ export class NitroliteChannel {
       brokerUrl: config.brokerUrl,
       brokerAddress: config.brokerAddress,
       operatorAddress: this.wallet.address,
+      custody: config.custodyAddress ?? NITROLITE.custodyAddress,
+      adjudicator: config.adjudicatorAddress ?? NITROLITE.adjudicatorAddress,
     });
   }
 
@@ -340,14 +347,15 @@ export class NitroliteChannel {
 
 /**
  * Create a NitroliteChannel from environment variables.
- * Returns null if required env vars are missing (graceful fallback).
+ * Falls back to testnet ClearNode URL from constants.ts.
+ * Returns null if no signer key is provided (graceful fallback).
  */
 export function createNitroliteChannel(): NitroliteChannel | null {
-  const brokerUrl = process.env.NITROLITE_BROKER_URL;
+  const brokerUrl = process.env.NITROLITE_BROKER_URL ?? NITROLITE.clearNodeUrl;
   const signerKey = process.env.NITROLITE_SIGNER_KEY;
   const brokerAddr = process.env.NITROLITE_BROKER_ADDRESS;
 
-  if (!brokerUrl || !signerKey || !brokerAddr) {
+  if (!signerKey || !brokerAddr) {
     return null;
   }
 
@@ -359,5 +367,7 @@ export function createNitroliteChannel(): NitroliteChannel | null {
     brokerUrl,
     signerPrivateKey: signerKey,
     brokerAddress: brokerAddr,
+    custodyAddress: process.env.NITROLITE_CUSTODY_ADDRESS ?? NITROLITE.custodyAddress,
+    adjudicatorAddress: process.env.NITROLITE_ADJUDICATOR_ADDRESS ?? NITROLITE.adjudicatorAddress,
   });
 }

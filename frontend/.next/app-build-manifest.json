@@ -11,6 +11,11 @@
       "static/chunks/main-app.js",
       "static/chunks/app/page.js"
     ],
+    "/api/agent/route": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/api/agent/route.js"
+    ],
     "/api/session/route": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
@@ -25,16 +30,6 @@
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/api/policy/route.js"
-    ],
-    "/api/simulate/route": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/api/simulate/route.js"
-    ],
-    "/api/swap/route": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/api/swap/route.js"
     ]
   }
 }

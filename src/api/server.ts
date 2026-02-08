@@ -28,6 +28,7 @@ import { createUniswapV4Client } from "../mcp-server/uniswap-client.js";
 import { createNitroliteChannel, type NitroliteChannel } from "../session/channel.js";
 import { createENSResolver, type ENSResolver } from "../shared/ens.js";
 import { createSettlementClient, type SettlementClient } from "../contracts/index.js";
+import { createAgent, type SentinelAgent, type ToolExecutor } from "../agent/index.js";
 
 // Load env
 config();
@@ -44,6 +45,86 @@ const v4Client = createUniswapV4Client();
 const swapSimulator = new SwapSimulator(v4Client);
 const ensResolver = createENSResolver();
 const settlementClient = createSettlementClient();
+
+// ---- Initialize AI Agent ----
+
+const agent = createAgent();
+
+// Wire the agent's tool executor to real services
+function createToolExecutor(): ToolExecutor {
+  return {
+    async getBalance(asset) {
+      try {
+        const balance = sessionManager.getBalance(asset);
+        return { success: true, data: balance, timestamp: new Date().toISOString() };
+      } catch (e) {
+        return { success: false, error: (e as Error).message, timestamp: new Date().toISOString() };
+      }
+    },
+    async simulateSwap(tokenIn, tokenOut, amount) {
+      const simulation = await swapSimulator.simulate(tokenIn, tokenOut, amount);
+      // Policy dry-run
+      const proposal: SwapProposal = {
+        id: `ai-sim-${randomUUID().slice(0, 8)}`,
+        tokenIn, tokenOut, amountIn: amount,
+        estimatedAmountOut: simulation.estimatedAmountOut,
+        maxSlippageBps: 50, dex: DEX.UNISWAP_V4,
+        timestamp: new Date().toISOString(),
+      };
+      let policyApproved = false;
+      try {
+        const decision = policyEngine.evaluate(proposal, sessionManager.getBalances());
+        policyApproved = decision.approved;
+      } catch { /* session not active */ }
+      return {
+        ...simulation,
+        policyApproved,
+        route: simulation.route,
+      } as any;
+    },
+    async proposeSwap(tokenIn, tokenOut, amount) {
+      const simulation = await swapSimulator.simulate(tokenIn, tokenOut, amount);
+      const proposal: SwapProposal = {
+        id: `ai-prop-${randomUUID().slice(0, 8)}`,
+        tokenIn, tokenOut, amountIn: amount,
+        estimatedAmountOut: simulation.estimatedAmountOut,
+        maxSlippageBps: 50, dex: DEX.UNISWAP_V4,
+        timestamp: new Date().toISOString(),
+      };
+      const decision = policyEngine.evaluate(proposal, sessionManager.getBalances());
+      if (!decision.approved) {
+        const reasons = decision.results.filter(r => !r.passed).map(r => `${r.rule.name}: ${r.reason}`).join("; ");
+        addAudit("ai_swap_rejected", `AI swap rejected: ${reasons}`, { tokenIn, tokenOut, amount });
+        return { success: false, error: `Policy rejected: ${reasons}`, policyDecision: decision, timestamp: new Date().toISOString() };
+      }
+      const result = await sessionManager.applySwap(tokenIn, tokenOut, amount, simulation.estimatedAmountOut, proposal.id);
+      addAudit("ai_swap_executed", `AI executed ${amount} ${tokenIn} → ${result.amountOut} ${tokenOut}`, { proposalId: proposal.id, amountOut: result.amountOut });
+      return { success: true, data: { swapResult: result, proposal }, policyDecision: decision, timestamp: new Date().toISOString() };
+    },
+    async closeSession() {
+      const session = await sessionManager.close();
+      let txHash: `0x${string}`;
+      if (settlementClient) {
+        const record = await settlementClient.settle(session);
+        txHash = record.txHash;
+      } else {
+        txHash = `0x${randomUUID().replace(/-/g, "")}${randomUUID().replace(/-/g, "").slice(0, 32)}` as `0x${string}`;
+      }
+      sessionManager.markSettled(txHash);
+      addAudit("ai_session_settled", `AI settled session: ${txHash}`, { txHash });
+      return { success: true, data: { txHash }, timestamp: new Date().toISOString() };
+    },
+    getSessionSummary() {
+      try {
+        return { ...sessionManager.getSummary() };
+      } catch {
+        return { balances: { USDC: 0, ETH: 0 }, totalSwaps: 0, totalValueUsd: 0, status: "none" as any };
+      }
+    },
+  };
+}
+
+agent.setToolExecutor(createToolExecutor());
 
 // Track audit log in-memory (mirrors session lifecycle)
 interface AuditEntry {
@@ -486,6 +567,53 @@ function handleAudit(_req: IncomingMessage, res: ServerResponse): void {
   json(res, auditLog);
 }
 
+async function handleAgent(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method === "GET") {
+    // Return conversation history
+    json(res, {
+      history: agent.getHistory(),
+      provider: process.env.AI_PROVIDER ?? "heuristic",
+      hasApiKey: !!(process.env.AI_API_KEY ?? process.env.OPENAI_API_KEY ?? process.env.ANTHROPIC_API_KEY),
+    });
+    return;
+  }
+
+  if (req.method === "POST") {
+    try {
+      const body = await readBody(req);
+      const message = body.message as string;
+
+      if (!message || typeof message !== "string") {
+        return errorResp(res, "Missing 'message' field");
+      }
+
+      // Re-wire tool executor in case session changed
+      agent.setToolExecutor(createToolExecutor());
+
+      log.info(`AI agent received: "${message.slice(0, 100)}"`);
+      const responses = await agent.chat(message);
+
+      addAudit("ai_chat", `User: ${message.slice(0, 100)}`, {
+        responseCount: responses.length,
+        toolCalls: responses.filter(r => r.toolCall).map(r => r.toolCall?.name),
+      });
+
+      json(res, { responses });
+    } catch (e) {
+      errorResp(res, (e as Error).message);
+    }
+    return;
+  }
+
+  if (req.method === "DELETE") {
+    agent.resetConversation();
+    json(res, { cleared: true });
+    return;
+  }
+
+  errorResp(res, "Method not allowed", 405);
+}
+
 function handleStatus(_req: IncomingMessage, res: ServerResponse): void {
   json(res, {
     status: "running",
@@ -496,6 +624,7 @@ function handleStatus(_req: IncomingMessage, res: ServerResponse): void {
       nitrolite: nitroliteChannel ? "real-ecdsa" : "not-configured",
       ens: ensResolver ? "real" : "not-configured",
       settlement: settlementClient ? "on-chain" : "mock",
+      aiAgent: process.env.AI_API_KEY ? (process.env.AI_PROVIDER ?? "openai") : "heuristic",
     },
     policyHash: policyEngine.getPolicyHash(),
     timestamp: new Date().toISOString(),
@@ -531,6 +660,9 @@ async function router(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (url === "/api/audit" || url === "/api/audit/") {
       return handleAudit(req, res);
     }
+    if (url === "/api/agent" || url === "/api/agent/") {
+      return await handleAgent(req, res);
+    }
     if (url === "/api/status" || url === "/api/status/") {
       return handleStatus(req, res);
     }
@@ -562,6 +694,7 @@ server.listen(API_PORT, () => {
     swap: `POST /api/swap`,
     policy: `GET /api/policy`,
     audit: `GET /api/audit`,
+    agent: `GET/POST/DELETE /api/agent`,
     status: `GET /api/status`,
   });
 });

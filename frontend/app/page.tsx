@@ -8,6 +8,7 @@ import PolicyPanel from "@/components/PolicyPanel";
 import AuditLog from "@/components/AuditLog";
 import SessionControls from "@/components/SessionControls";
 import SwapHistory from "@/components/SwapHistory";
+import ChatPanel from "@/components/ChatPanel";
 
 interface SessionState {
   sessionId: string | null;
@@ -157,6 +158,9 @@ export default function Dashboard() {
         {session.history.length > 0 && (
           <SwapHistory history={session.history} />
         )}
+
+        {/* AI Agent Chat */}
+        <ChatPanel />
 
         {/* Audit Log */}
         <AuditLog entries={audit} />

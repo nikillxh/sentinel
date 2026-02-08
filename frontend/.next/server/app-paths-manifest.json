@@ -1,8 +1,7 @@
 {
+  "/api/agent/route": "app/api/agent/route.js",
   "/api/session/route": "app/api/session/route.js",
   "/api/audit/route": "app/api/audit/route.js",
   "/api/policy/route": "app/api/policy/route.js",
-  "/api/simulate/route": "app/api/simulate/route.js",
-  "/api/swap/route": "app/api/swap/route.js",
   "/page": "app/page.js"
 }

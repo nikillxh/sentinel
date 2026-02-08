@@ -19,7 +19,7 @@ import {
   solidityPackedKeccak256,
 } from "ethers";
 import { Logger } from "../shared/logger.js";
-import { TOKENS, CHAIN, BPS_DENOMINATOR } from "../shared/constants.js";
+import { TOKENS, CHAIN, BPS_DENOMINATOR, UNISWAP_V4 } from "../shared/constants.js";
 import type { Asset, SwapSimulation } from "../shared/types.js";
 
 // ---- Uniswap v4 ABIs (subset) ----
@@ -355,13 +355,15 @@ export class UniswapV4Client {
 
 /**
  * Create a UniswapV4Client from environment variables.
- * Returns null if required env vars are missing.
+ * Falls back to official Base Sepolia addresses from constants.ts.
+ * Returns null only if no RPC URL is available.
  */
 export function createUniswapV4Client(): UniswapV4Client | null {
-  const rpcUrl = process.env.RPC_URL ?? process.env.BASE_SEPOLIA_RPC_URL;
-  const quoterAddr = process.env.UNISWAP_V4_QUOTER_ADDRESS;
+  const rpcUrl = process.env.RPC_URL ?? process.env.BASE_SEPOLIA_RPC_URL ?? CHAIN.rpcUrl;
+  const quoterAddr = process.env.UNISWAP_V4_QUOTER_ADDRESS ?? UNISWAP_V4.quoterAddress;
+  const poolManagerAddr = process.env.UNISWAP_V4_POOL_MANAGER_ADDRESS ?? UNISWAP_V4.poolManagerAddress;
 
-  if (!rpcUrl || !quoterAddr) {
+  if (!rpcUrl) {
     return null;
   }
 
@@ -372,6 +374,6 @@ export function createUniswapV4Client(): UniswapV4Client | null {
   return new UniswapV4Client({
     rpcUrl,
     quoterAddress: quoterAddr,
-    poolManagerAddress: process.env.UNISWAP_V4_POOL_MANAGER_ADDRESS,
+    poolManagerAddress: poolManagerAddr,
   });
 }

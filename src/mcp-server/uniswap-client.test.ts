@@ -74,11 +74,13 @@ describe("createUniswapV4Client factory", () => {
     process.env = originalEnv;
   });
 
-  it("should return null when env vars are missing", () => {
+  it("should return a client even without env vars (falls back to constants)", () => {
     delete process.env.RPC_URL;
     delete process.env.BASE_SEPOLIA_RPC_URL;
     delete process.env.UNISWAP_V4_QUOTER_ADDRESS;
-    expect(createUniswapV4Client()).toBeNull();
+    // Factory now falls back to CHAIN.rpcUrl and UNISWAP_V4.quoterAddress from constants
+    const client = createUniswapV4Client();
+    expect(client).toBeInstanceOf(UniswapV4Client);
   });
 
   it("should return null when quoter address is placeholder", () => {

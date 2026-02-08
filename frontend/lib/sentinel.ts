@@ -251,6 +251,47 @@ class SentinelClient {
     }
     return res.json();
   }
+
+  // ---- AI Agent ----
+
+  async chatWithAgent(message: string): Promise<{
+    responses: Array<{ message: string; reasoning?: string; action?: Record<string, unknown> }>;
+    history: Array<{ role: string; content: string }>;
+    provider: string;
+  }> {
+    const res = await fetch(`${this.baseUrl}/api/agent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error ?? "Failed to chat with agent");
+    }
+    return res.json();
+  }
+
+  async getAgentHistory(): Promise<{
+    history: Array<{ role: string; content: string }>;
+    provider: string;
+    messageCount: number;
+  }> {
+    const res = await fetch(`${this.baseUrl}/api/agent`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error ?? "Failed to get agent history");
+    }
+    return res.json();
+  }
+
+  async resetAgent(): Promise<{ success: boolean }> {
+    const res = await fetch(`${this.baseUrl}/api/agent`, { method: "DELETE" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error ?? "Failed to reset agent");
+    }
+    return res.json();
+  }
 }
 
 // ---- Global Singleton ----
