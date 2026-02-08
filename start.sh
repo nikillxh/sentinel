@@ -1,15 +1,4 @@
 #!/usr/bin/env bash
-# ============================================================
-# Sentinel – Local Demo Launcher
-# Starts Anvil → deploys contracts → API server → frontend.
-# Three services: Anvil (:8546), API (:3001), Frontend (:3000)
-#
-# Usage:  ./start.sh          # start everything
-#         ./start.sh stop     # stop all services
-#
-# No API keys required — everything runs locally.
-# ============================================================
-
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
