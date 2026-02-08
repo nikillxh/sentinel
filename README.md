@@ -438,6 +438,6 @@ Agent → propose_swap({ tokenIn: "USDC", tokenOut: "ETH", amount: 50 })
 
 ## License
 
-MIT
+[AGPL-3.0](./LICENSE)
 
 ---
