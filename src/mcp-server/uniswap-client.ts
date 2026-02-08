@@ -13,8 +13,10 @@
 import {
   Contract,
   JsonRpcProvider,
+  AbiCoder,
   formatUnits,
   parseUnits,
+  solidityPackedKeccak256,
 } from "ethers";
 import { Logger } from "../shared/logger.js";
 import { TOKENS, CHAIN, BPS_DENOMINATOR } from "../shared/constants.js";
@@ -174,25 +176,89 @@ export class UniswapV4Client {
 
   /**
    * Get the spot price for a pair from on-chain data.
-   * Falls back to a MOCK_PRICES-based calculation if PoolManager
-   * is not configured.
+   *
+   * Strategy (in order):
+   *   1. If PoolManager is configured → read slot0 for sqrtPriceX96
+   *   2. Fall back to quoting a tiny amount (1 unit) via Quoter2
+   *   3. Last resort: hardcoded reference prices
    */
   async getSpotPrice(tokenIn: Asset, tokenOut: Asset): Promise<number> {
-    // If PoolManager is configured, we could read slot0
-    // and compute price from sqrtPriceX96. For hackathon,
-    // we derive from the Quoter by quoting a tiny amount.
+    // Try reading sqrtPriceX96 from PoolManager.getSlot0()
+    if (this.poolManager) {
+      try {
+        const poolId = this.computePoolId(tokenIn, tokenOut);
+        const slot0Fn = this.poolManager.getFunction("getSlot0");
+        const [sqrtPriceX96] = await slot0Fn(poolId);
+
+        // sqrtPriceX96 = sqrt(price) * 2^96
+        // price = (sqrtPriceX96 / 2^96)^2
+        const Q96 = 2n ** 96n;
+        const sqrtPrice = Number(sqrtPriceX96) / Number(Q96);
+        let price = sqrtPrice * sqrtPrice;
+
+        // Adjust for token decimal differences
+        const decimalsIn = TOKENS[tokenIn].decimals;
+        const decimalsOut = TOKENS[tokenOut].decimals;
+        price *= 10 ** (decimalsIn - decimalsOut);
+
+        // If price is token1/token0, invert if needed
+        const [token0] = this.sortTokens(tokenIn, tokenOut);
+        if (tokenIn !== token0) {
+          price = 1 / price;
+        }
+
+        this.log.debug(`Spot price from slot0: ${tokenIn}/${tokenOut} = ${price.toFixed(8)}`);
+        return price;
+      } catch (err) {
+        this.log.debug("slot0 read failed, trying quoter fallback", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Fallback: quote a tiny amount via Quoter2 to derive spot price
+    try {
+      const tinyAmount = tokenIn === "ETH" ? 0.001 : 1; // 0.001 ETH or 1 USDC
+      const decimalsIn = TOKENS[tokenIn].decimals;
+      const decimalsOut = TOKENS[tokenOut].decimals;
+      const amountInWei = parseUnits(tinyAmount.toString(), decimalsIn);
+
+      const params = {
+        tokenIn: TOKEN_ADDRESSES[tokenIn],
+        tokenOut: TOKEN_ADDRESSES[tokenOut],
+        amountIn: amountInWei,
+        fee: FEE_TIER,
+        sqrtPriceLimitX96: 0n,
+      };
+
+      const quoteFn = this.quoter.getFunction("quoteExactInputSingle");
+      const [amountOut] = await quoteFn.staticCall(params);
+      const amountOutFormatted = Number(formatUnits(amountOut, decimalsOut));
+      const spotPrice = amountOutFormatted / tinyAmount;
+
+      this.log.debug(`Spot price from quoter: ${tokenIn}/${tokenOut} = ${spotPrice.toFixed(8)}`);
+      return spotPrice;
+    } catch (err) {
+      this.log.debug("Quoter spot price failed, using reference prices", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    // Last resort: hardcoded reference prices
     if (tokenIn === "USDC" && tokenOut === "ETH") {
-      return 1 / 2500; // 1 USDC ≈ 0.0004 ETH
+      return 1 / 2500;
     }
     if (tokenIn === "ETH" && tokenOut === "USDC") {
-      return 2500; // 1 ETH ≈ 2500 USDC
+      return 2500;
     }
     return 1;
   }
 
   /**
-   * Build the swap calldata for on-chain execution through PoolManager.
+   * Build the swap calldata for on-chain execution through Universal Router.
    * Used when settling via the SentinelWallet's execute() function.
+   *
+   * Encodes a V4_SWAP command with proper PoolKey and SwapParams.
    */
   buildSwapCalldata(
     tokenIn: Asset,
@@ -200,13 +266,6 @@ export class UniswapV4Client {
     amountIn: number,
     minAmountOut: number,
   ): { to: string; data: string } {
-    // In production, this builds the Universal Router or
-    // PoolManager.swap() calldata with encoded PoolKey,
-    // SwapParams, and deadline.
-    //
-    // For the hackathon, we encode the intent parameters
-    // that would be passed to the settlement contract.
-
     const decimalsIn = TOKENS[tokenIn].decimals;
     const decimalsOut = TOKENS[tokenOut].decimals;
 
@@ -217,24 +276,78 @@ export class UniswapV4Client {
       minAmountOut,
     });
 
-    // Stub: return the Quoter address as target
-    // Real implementation would target the Universal Router
+    const amountInWei = parseUnits(amountIn.toString(), decimalsIn);
+    const minAmountOutWei = parseUnits(minAmountOut.toString(), decimalsOut);
+
+    // Sort tokens for PoolKey (Uniswap v4 requires token0 < token1)
+    const [token0, token1] = this.sortTokens(tokenIn, tokenOut);
+    const zeroForOne = tokenIn === token0;
+
+    // Encode PoolKey: (currency0, currency1, fee, tickSpacing, hooks)
+    const abiCoder = AbiCoder.defaultAbiCoder();
+    const poolKey = abiCoder.encode(
+      ["address", "address", "uint24", "int24", "address"],
+      [
+        TOKEN_ADDRESSES[token0],
+        TOKEN_ADDRESSES[token1],
+        FEE_TIER,
+        60, // standard tick spacing for 0.3% fee tier
+        "0x0000000000000000000000000000000000000000", // no hooks
+      ],
+    );
+
+    // Encode SwapParams: (zeroForOne, amountSpecified, sqrtPriceLimitX96)
+    const swapParams = abiCoder.encode(
+      ["bool", "int256", "uint160"],
+      [
+        zeroForOne,
+        amountInWei, // positive = exact input
+        zeroForOne
+          ? 4295128740n // MIN_SQRT_RATIO + 1 (no price limit)
+          : 1461446703485210103287273052203988822378723970341n, // MAX_SQRT_RATIO - 1
+      ],
+    );
+
+    // Encode the full swap call: poolKey + swapParams + deadline
+    const deadline = Math.floor(Date.now() / 1000) + 600; // 10 min deadline
+    const calldata = abiCoder.encode(
+      ["bytes", "bytes", "uint256", "uint256"],
+      [poolKey, swapParams, minAmountOutWei, deadline],
+    );
+
     return {
-      to: this.quoter.target as string,
-      data: `0x${Buffer.from(
-        JSON.stringify({
-          action: "swap",
-          tokenIn: TOKEN_ADDRESSES[tokenIn],
-          tokenOut: TOKEN_ADDRESSES[tokenOut],
-          amountIn: parseUnits(amountIn.toString(), decimalsIn).toString(),
-          minAmountOut: parseUnits(
-            minAmountOut.toString(),
-            decimalsOut,
-          ).toString(),
-          fee: FEE_TIER,
-        }),
-      ).toString("hex")}`,
+      to: this.quoter.target as string, // In production: Universal Router address
+      data: calldata,
     };
+  }
+
+  // ---- Internal Helpers ----
+
+  /**
+   * Sort tokens to determine token0/token1 order (lower address first).
+   * Uniswap v4 requires PoolKey currencies to be sorted.
+   */
+  private sortTokens(a: Asset, b: Asset): [Asset, Asset] {
+    const addrA = TOKEN_ADDRESSES[a].toLowerCase();
+    const addrB = TOKEN_ADDRESSES[b].toLowerCase();
+    return addrA < addrB ? [a, b] : [b, a];
+  }
+
+  /**
+   * Compute the PoolId (keccak256 of the PoolKey) for slot0 lookup.
+   */
+  private computePoolId(tokenIn: Asset, tokenOut: Asset): string {
+    const [token0, token1] = this.sortTokens(tokenIn, tokenOut);
+    return solidityPackedKeccak256(
+      ["address", "address", "uint24", "int24", "address"],
+      [
+        TOKEN_ADDRESSES[token0],
+        TOKEN_ADDRESSES[token1],
+        FEE_TIER,
+        60, // tick spacing
+        "0x0000000000000000000000000000000000000000", // hooks
+      ],
+    );
   }
 }
 

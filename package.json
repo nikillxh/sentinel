@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc",
     "dev:mcp": "tsx src/mcp-server/index.ts",
+    "dev:api": "tsx src/api/server.ts",
     "dev:demo": "tsx src/demo/scenario.ts",
     "test": "vitest run",
     "test:watch": "vitest",

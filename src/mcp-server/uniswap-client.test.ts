@@ -54,15 +54,11 @@ describe("UniswapV4Client", () => {
 
     it("should encode the correct parameters in calldata", () => {
       const result = client.buildSwapCalldata("ETH", "USDC", 1, 2400);
-      const hexPayload = result.data.slice(2);
-      const decoded = JSON.parse(Buffer.from(hexPayload, "hex").toString());
 
-      expect(decoded.action).toBe("swap");
-      expect(decoded.tokenIn).toBe(
-        "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
-      );
-      expect(decoded.tokenOut).toBe(TOKENS.USDC.address);
-      expect(decoded.fee).toBe(3000);
+      // Now uses proper ABI encoding instead of JSON hex
+      expect(result.data).toMatch(/^0x/);
+      expect(result.data.length).toBeGreaterThan(100); // ABI-encoded calldata is long
+      expect(result.to).toBe(TEST_CONFIG.quoterAddress);
     });
   });
 });

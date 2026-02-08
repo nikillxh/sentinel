@@ -37,11 +37,11 @@ Swaps execute **instantly off-chain** via Yellow Network / Nitrolite state chann
 │              │                       │  │   Engine    │  │  (Nitrolite Channel)│     │
 └──────────────┘                       │  │  4 rules,   │  │  Off-chain balance  │     │
                                        │  │  SHA-256    │  │  tracking + state   │     │
-                                       │  │  anchored   │  │  channel co-signing │     │
-                                       │  └─────┬──────┘  └──────────┬──────────┘     │
-                                       │        │ approve/reject      │ update         │
-                                       │        ▼                     ▼                │
-                                       │  ┌──────────────────────────────────────┐     │
+┌──────────────┐                       │  │  anchored   │  │  channel co-signing │     │
+│   Next.js    │   fetch() proxy       │  └─────┬──────┘  └──────────┬──────────┘     │
+│   Frontend   │──────────────────────►│        │ approve/reject      │ update         │
+│  :3000       │   API Server :3001    │        ▼                     ▼                │
+└──────────────┘                       │  ┌──────────────────────────────────────┐     │
                                        │  │         Swap Simulator               │     │
                                        │  │   Uniswap v4 Quoter / Local AMM     │     │
                                        │  └──────────────────────────────────────┘     │
@@ -60,12 +60,13 @@ Swaps execute **instantly off-chain** via Yellow Network / Nitrolite state chann
 | Feature | Description |
 |---|---|
 | **🔒 Policy Engine** | 4 deterministic rules: max trade size (2% of balance), allowed DEX (Uniswap v4 only), allowed assets (USDC/ETH), max slippage (0.5%). Every decision is logged with a full audit trail. |
-| **⚡ Off-Chain Sessions** | Swaps execute instantly and gaslessly during the session via Nitrolite state channels. Each state transition is cryptographically co-signed. |
+| **⚡ Off-Chain Sessions** | Swaps execute instantly and gaslessly during the session via Nitrolite state channels. Each state transition is co-signed with **real ECDSA** (`ethers.Wallet.signMessage`). |
 | **🔗 On-Chain Settlement** | Final session balances settle once on-chain via the SentinelWallet smart contract, validated by PolicyGuard. ERC-4337 compatible. |
 | **🤖 MCP Server** | 4 tools exposed over the Model Context Protocol — any MCP-compatible AI agent (Claude Desktop, etc.) can use them. |
-| **📊 Uniswap v4 Integration** | Queries the Quoter2 contract for real on-chain swap quotes. Falls back to a constant-product AMM simulator for demo/testing. |
-| **🪪 ENS Identity** | Agent identity resolved from ENS. Policy hash stored as a text record (`com.sentinel.policyHash`) for tamper-proof verification. |
+| **📊 Uniswap v4 Integration** | Queries the Quoter2 contract for real on-chain swap quotes. `getSpotPrice()` reads `sqrtPriceX96` from PoolManager slot0, with Quoter micro-quote and local AMM fallbacks. `buildSwapCalldata()` uses proper ABI-encoded PoolKey + SwapParams. |
+| **🪪 ENS Identity** | Agent identity resolved from ENS on session open. Policy hash stored as a text record (`com.sentinel.policyHash`) for tamper-proof verification. |
 | **🏗️ Smart Contracts** | `SentinelWallet` (ERC-4337 smart wallet) + `PolicyGuard` (on-chain policy enforcement). Solidity 0.8.24, OpenZeppelin v5, Foundry tested. |
+| **🌐 Web Dashboard** | Next.js 15 + React 19 + Tailwind CSS frontend. Proxies all calls to the real backend API — zero duplicate logic. |
 
 ## Architecture
 
@@ -84,13 +85,16 @@ src/
 │
 ├── session/              # Off-chain session management
 │   ├── manager.ts        # Balance tracking, swap execution, session lifecycle
-│   └── channel.ts        # Nitrolite state channel client (co-signed states)
+│   └── channel.ts        # Nitrolite state channel (real ECDSA signatures)
 │
 ├── mcp-server/           # MCP protocol interface
 │   ├── index.ts          # Server entry point (stdio transport)
 │   ├── tools.ts          # 4 MCP tool handlers with Zod schemas
 │   ├── swap-simulator.ts # Constant-product AMM + Uniswap v4 fallback
-│   └── uniswap-client.ts # On-chain Quoter2 integration
+│   └── uniswap-client.ts # On-chain Quoter2 + PoolManager slot0 integration
+│
+├── api/                  # Backend API server (wraps all real services)
+│   └── server.ts         # HTTP server on port 3001 — frontend proxies here
 │
 ├── contracts/            # TypeScript bindings for smart contracts
 │   ├── abis.ts           # Human-readable ABIs
@@ -98,6 +102,11 @@ src/
 │
 └── demo/
     └── scenario.ts       # Full 7-step demo scenario
+
+frontend/                 # Next.js 15 + React 19 + Tailwind dashboard
+├── app/                  # App router pages + API routes (proxy to backend)
+├── components/           # UI components (Header, SwapPanel, PolicyPanel, etc.)
+└── lib/sentinel.ts       # Thin fetch() wrapper → real backend API
 
 contracts/                # Solidity smart contracts (Foundry)
 ├── src/
@@ -182,6 +191,31 @@ npm install
 cd contracts && forge install && cd ..
 ```
 
+### Quick Start (One Command)
+
+The easiest way to run everything locally — no API keys needed:
+
+```bash
+./start.sh
+```
+
+This single command:
+1. ✅ Checks prerequisites (Node ≥ 20, Foundry)
+2. ✅ Installs all dependencies (root + frontend)
+3. ✅ Starts Anvil on port 8546 (local EVM)
+4. ✅ Deploys SentinelWallet + PolicyGuard contracts
+5. ✅ Generates `.env` with deployed addresses + Nitrolite config
+6. ✅ Starts the Sentinel API server on port 3001
+7. ✅ Starts the Next.js frontend on port 3000
+
+Open **http://localhost:3000** and start trading.
+
+To stop all services:
+
+```bash
+./start.sh stop
+```
+
 ### Configuration
 
 ```bash
@@ -195,7 +229,7 @@ cp .env.example .env
 #   POLICY_GUARD_ADDRESS    — After deployment
 ```
 
-### Run the Demo
+### Run the Demo (CLI)
 
 ```bash
 # Run the full 7-step demo scenario
@@ -210,6 +244,16 @@ This will:
 5. Execute another valid 2% swap
 6. Show final session state
 7. Close & settle (mock or real on-chain)
+
+### Run the API Server (Backend for Frontend)
+
+```bash
+# Start the backend API server on port 3001
+npx tsx src/api/server.ts
+
+# The frontend (port 3000) proxies all calls here.
+# API endpoints: /api/session, /api/simulate, /api/swap, /api/policy, /api/audit, /api/status
+```
 
 ### Run as MCP Server
 
@@ -250,48 +294,55 @@ npx vitest
 
 ## Deployment
 
-### Option A: Local Network (Anvil)
+### Option A: Local Network (One Command)
 
-The fastest way to test with real contracts — no testnet ETH needed.
+The fastest way to test with real contracts — **no API keys or testnet ETH needed**.
+
+```bash
+./start.sh
+```
+
+This starts Anvil (port 8546) → deploys contracts → starts API server (port 3001) → starts frontend (port 3000). Everything is auto-configured.
+
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:3000 |
+| API Server | http://localhost:3001 |
+| Anvil RPC | http://127.0.0.1:8546 |
+
+Logs are stored in `.logs/anvil.log`, `.logs/api.log`, and `.logs/frontend.log`.
+
+<details>
+<summary>Manual setup (if you prefer separate terminals)</summary>
 
 **Terminal 1 — Start Anvil:**
 
 ```bash
-# Start a local EVM node (forks Base Sepolia for realistic USDC)
-anvil --fork-url https://sepolia.base.org --chain-id 84532
+anvil --chain-id 84532 --port 8546
 ```
-
-Anvil prints 10 funded accounts. Copy the **first private key** (Account 0).
 
 **Terminal 2 — Deploy:**
 
 ```bash
 cd contracts
-
-# Set the operator key (Anvil account 0)
 export OPERATOR_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-
-# Deploy to local Anvil
-forge script script/Deploy.s.sol \
-  --rpc-url http://127.0.0.1:8545 \
-  --broadcast
+forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8546 --broadcast
 ```
 
-The script prints the deployed addresses. Update your `.env`:
+**Terminal 3 — API Server:**
 
 ```bash
-RPC_URL=http://127.0.0.1:8545
-OPERATOR_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-SENTINEL_WALLET_ADDRESS=<printed address>
-POLICY_GUARD_ADDRESS=<printed address>
+# Update .env with deployed addresses first
+npx tsx src/api/server.ts
 ```
 
-**Terminal 2 — Run the demo against local contracts:**
+**Terminal 4 — Frontend:**
 
 ```bash
-cd ..
-npx tsx src/demo/scenario.ts
+cd frontend && npx next dev --port 3000
 ```
+
+</details>
 
 ### Option B: Base Sepolia Testnet
 
@@ -378,13 +429,32 @@ npx tsx src/mcp-server/index.ts # MCP server, mock settlement
 | `ENTRYPOINT_ADDRESS` | Optional | ERC-4337 EntryPoint v0.7 (defaults to canonical address) |
 | `ETHERSCAN_API_KEY` | Optional | BaseScan API key for contract verification |
 | `NITROLITE_BROKER_URL` | Optional | WebSocket URL for Nitrolite broker |
-| `NITROLITE_SIGNER_KEY` | Optional | Private key for channel state signing |
+| `NITROLITE_SIGNER_KEY` | Optional | Private key for channel state signing (ECDSA) |
 | `NITROLITE_BROKER_ADDRESS` | Optional | Broker's Ethereum address |
 | `UNISWAP_V4_QUOTER_ADDRESS` | Optional | Uniswap v4 Quoter2 contract address |
+| `UNISWAP_V4_POOL_MANAGER_ADDRESS` | Optional | Uniswap v4 PoolManager address (for slot0 spot price) |
 | `ENS_RPC_URL` | Optional | RPC for ENS resolution (Ethereum mainnet) |
+| `ENS_REGISTRY_ADDRESS` | Optional | Custom ENS registry address |
+| `API_PORT` | Optional | Backend API server port (default: 3001) |
+| `AGENT_ENS_NAME` | Optional | ENS name for agent identity (default: sentinel-agent.eth) |
 | `LOG_LEVEL` | Optional | `debug`, `info`, `warn`, `error` |
 
-> **Note:** All on-chain features gracefully degrade. Without env vars, Sentinel runs in full mock mode — perfect for development and demos.
+> **Note:** All on-chain features gracefully degrade. Without env vars, Sentinel runs in full mock mode — perfect for development and demos. The `start.sh` script auto-configures everything for local development.
+
+## Do I Need API Keys?
+
+**For local development: NO.** The `./start.sh` script runs everything locally with zero external dependencies:
+
+| Integration | Local Mode | Testnet Mode |
+|---|---|---|
+| **EVM RPC** | Anvil (local) — no key needed | Public RPCs like `https://sepolia.base.org` work without a key. For higher rate limits, get a free key from [Alchemy](https://www.alchemy.com/), [Infura](https://infura.io/), or [QuickNode](https://www.quicknode.com/). |
+| **ENS Resolution** | Skipped (graceful fallback) | Needs an Ethereum mainnet RPC (`ENS_RPC_URL`). Free public RPCs like `https://eth.llamarpc.com` work. |
+| **Uniswap v4 Quoter** | Local AMM simulator | Set `UNISWAP_V4_QUOTER_ADDRESS` to query real on-chain quotes — no API key, just an RPC. |
+| **Nitrolite Channel** | Auto-configured with Anvil keys | In production, connect to a Yellow Network broker. No API key — uses WebSocket + ECDSA signing. |
+| **BaseScan Verification** | Not needed | Optional `ETHERSCAN_API_KEY` for `--verify` during deployment. Get one free at [BaseScan](https://basescan.org/apis). |
+| **Smart Contracts** | Deployed to local Anvil | Testnet ETH from [Base Faucet](https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet) (free, Coinbase account). |
+
+> **TL;DR:** Run `./start.sh` — zero API keys, zero testnet ETH, everything works out of the box.
 
 ## Tech Stack
 
@@ -393,12 +463,14 @@ npx tsx src/mcp-server/index.ts # MCP server, mock settlement
 | Language | TypeScript (ESM, strict mode) |
 | Runtime | Node.js ≥ 20, tsx for dev |
 | MCP | `@modelcontextprotocol/sdk` v1.12 |
+| Frontend | Next.js 15, React 19, Tailwind CSS 3.4 |
+| API Server | Node.js `http` module — lightweight, zero deps |
 | Validation | Zod schemas on all tool inputs |
 | Blockchain | ethers v6, viem v2.21 |
 | Smart Contracts | Solidity 0.8.24, OpenZeppelin v5, Foundry |
 | Chain | Base Sepolia (84532) |
-| DEX | Uniswap v4 (Quoter2 + local AMM fallback) |
-| State Channels | Yellow Network / Nitrolite |
+| DEX | Uniswap v4 (Quoter2 + PoolManager slot0 + local AMM fallback) |
+| State Channels | Yellow Network / Nitrolite (real ECDSA signatures) |
 | Identity | ENS (text records for policy anchoring) |
 | Testing | Vitest (TS), Forge (Solidity) |
 | Logging | Chalk v5, structured per-module colors |

@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # ============================================================
 # Sentinel – Local Demo Launcher
-# Starts Anvil, deploys contracts, and launches the frontend.
-# Usage:  ./start.sh
-# Stop:   ./start.sh stop
+# Starts Anvil → deploys contracts → API server → frontend.
+# Three services: Anvil (:8546), API (:3001), Frontend (:3000)
+#
+# Usage:  ./start.sh          # start everything
+#         ./start.sh stop     # stop all services
+#
+# No API keys required — everything runs locally.
 # ============================================================
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ANVIL_PORT=8546
+API_PORT=3001
 FRONTEND_PORT=3000
 ANVIL_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 LOG_DIR="$ROOT_DIR/.logs"
@@ -44,6 +49,11 @@ cleanup() {
     rm -f "$LOG_DIR/anvil.pid"
   fi
 
+  if [ -f "$LOG_DIR/api.pid" ]; then
+    kill "$(cat "$LOG_DIR/api.pid")" 2>/dev/null && log "API server stopped" || true
+    rm -f "$LOG_DIR/api.pid"
+  fi
+
   if [ -f "$LOG_DIR/frontend.pid" ]; then
     kill "$(cat "$LOG_DIR/frontend.pid")" 2>/dev/null && log "Frontend stopped" || true
     rm -f "$LOG_DIR/frontend.pid"
@@ -51,6 +61,7 @@ cleanup() {
 
   # Kill any orphan processes on our ports
   lsof -ti :"$ANVIL_PORT" 2>/dev/null | xargs -r kill 2>/dev/null || true
+  lsof -ti :"$API_PORT" 2>/dev/null | xargs -r kill 2>/dev/null || true
   lsof -ti :"$FRONTEND_PORT" 2>/dev/null | xargs -r kill 2>/dev/null || true
 
   log "All processes stopped"
@@ -70,6 +81,7 @@ step "Checking prerequisites..."
 command -v node >/dev/null 2>&1 || { err "Node.js not found. Install Node >= 20."; exit 1; }
 command -v anvil >/dev/null 2>&1 || { err "Anvil not found. Install Foundry: https://book.getfoundry.sh"; exit 1; }
 command -v forge >/dev/null 2>&1 || { err "Forge not found. Install Foundry: https://book.getfoundry.sh"; exit 1; }
+command -v curl >/dev/null 2>&1 || { err "curl not found. Install curl."; exit 1; }
 
 NODE_VERSION=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
 if [ "$NODE_VERSION" -lt 20 ]; then
@@ -85,8 +97,9 @@ log "Forge $(forge --version 2>&1 | head -1)"
 mkdir -p "$LOG_DIR"
 
 # --- Kill anything on our ports ---
-step "Freeing ports $ANVIL_PORT and $FRONTEND_PORT..."
+step "Freeing ports $ANVIL_PORT, $API_PORT, and $FRONTEND_PORT..."
 lsof -ti :"$ANVIL_PORT" 2>/dev/null | xargs -r kill 2>/dev/null || true
+lsof -ti :"$API_PORT" 2>/dev/null | xargs -r kill 2>/dev/null || true
 lsof -ti :"$FRONTEND_PORT" 2>/dev/null | xargs -r kill 2>/dev/null || true
 sleep 1
 log "Ports clear"
@@ -189,6 +202,14 @@ ENTRYPOINT_ADDRESS=0x0000000071727De22E5E9d8BAf0edAc6f37da032
 # ENS
 AGENT_ENS_NAME=sentinel-agent.eth
 
+# Nitrolite State Channel (uses Anvil account 1 as signer)
+NITROLITE_BROKER_URL=ws://localhost:8547
+NITROLITE_SIGNER_KEY=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
+NITROLITE_BROKER_ADDRESS=0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+
+# API Server
+API_PORT=$API_PORT
+
 # Session defaults
 DEFAULT_SESSION_DEPOSIT_USDC=1000
 MAX_TRADE_PERCENT=2
@@ -199,6 +220,29 @@ LOG_LEVEL=debug
 EOF
 
 log ".env written with deployed addresses"
+
+# --- Start API Server ---
+step "Starting Sentinel API server on port $API_PORT..."
+
+(cd "$ROOT_DIR" && npx tsx src/api/server.ts) \
+  > "$LOG_DIR/api.log" 2>&1 &
+
+echo $! > "$LOG_DIR/api.pid"
+
+# Wait for API to be ready
+for i in $(seq 1 15); do
+  if curl -s "http://localhost:$API_PORT/api/status" > /dev/null 2>&1; then
+    break
+  fi
+  sleep 0.5
+done
+
+if ! curl -s "http://localhost:$API_PORT/api/status" > /dev/null 2>&1; then
+  err "API server failed to start. Check $LOG_DIR/api.log"
+  exit 1
+fi
+
+log "API server running — http://localhost:$API_PORT (PID $(cat "$LOG_DIR/api.pid"))"
 
 # --- Start Frontend ---
 step "Starting frontend on port $FRONTEND_PORT..."
@@ -230,9 +274,11 @@ echo -e "  ${CYAN}│${NC}                                                  ${CY
 echo -e "  ${CYAN}│${NC}   ${GREEN}🟢 All services running${NC}                        ${CYAN}│${NC}"
 echo -e "  ${CYAN}│${NC}                                                  ${CYAN}│${NC}"
 echo -e "  ${CYAN}│${NC}   Frontend:  ${YELLOW}http://localhost:$FRONTEND_PORT${NC}            ${CYAN}│${NC}"
+echo -e "  ${CYAN}│${NC}   API:       ${YELLOW}http://localhost:$API_PORT${NC}            ${CYAN}│${NC}"
 echo -e "  ${CYAN}│${NC}   Anvil:     ${YELLOW}http://127.0.0.1:$ANVIL_PORT${NC}            ${CYAN}│${NC}"
 echo -e "  ${CYAN}│${NC}                                                  ${CYAN}│${NC}"
 echo -e "  ${CYAN}│${NC}   Logs:      .logs/anvil.log                     ${CYAN}│${NC}"
+echo -e "  ${CYAN}│${NC}              .logs/api.log                       ${CYAN}│${NC}"
 echo -e "  ${CYAN}│${NC}              .logs/frontend.log                  ${CYAN}│${NC}"
 echo -e "  ${CYAN}│${NC}                                                  ${CYAN}│${NC}"
 echo -e "  ${CYAN}│${NC}   Stop:      ${BLUE}./start.sh stop${NC}                      ${CYAN}│${NC}"
