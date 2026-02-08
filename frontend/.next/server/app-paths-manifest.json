@@ -1,1 +1,7 @@
-{}
+{
+  "/api/session/route": "app/api/session/route.js",
+  "/api/simulate/route": "app/api/simulate/route.js",
+  "/api/swap/route": "app/api/swap/route.js",
+  "/api/audit/route": "app/api/audit/route.js",
+  "/page": "app/page.js"
+}

@@ -34,5 +34,8 @@ contracts/out/
 contracts/cache/
 contracts/broadcast/
 
+# Launcher logs
+.logs/
+
 # Misc
 *.bak
