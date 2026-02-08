@@ -122,9 +122,14 @@ export default function Dashboard() {
                 <p className="text-sm font-medium text-white">
                   Session Settled On-Chain
                 </p>
-                <p className="text-xs font-mono text-sentinel-accent mt-0.5">
-                  tx: {session.settlementTxHash}
-                </p>
+                <a
+                  href={`https://sepolia.basescan.org/tx/${session.settlementTxHash}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs font-mono text-sentinel-accent hover:underline mt-0.5 inline-block"
+                >
+                  tx: {session.settlementTxHash} ↗
+                </a>
               </div>
             </div>
           </div>
